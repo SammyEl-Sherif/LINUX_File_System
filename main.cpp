@@ -168,12 +168,6 @@ public:
                               SEEK_SET); // 16 (name) + 4 (size) = 20 at start of current inode
                     }
 
-                    /*char blockNum[5];
-                    snprintf(blockNum, 4, "%d", i+1);
-                    blockNum[1] = '0';
-                    blockNum[2] = '0';
-                    blockNum[3] = '0';
-                    blockNum[4] = '\0';*/
                     if (strlen(blockN) == 1) {
                         blockN[1] = '-';
                         blockN[2] = '-';
@@ -240,12 +234,24 @@ public:
         std::cout << "--------------------- inode ----------------------\n" << "Name: " << cleanName << "\nSize: "
                   << readSize[0] << "KB" << "\n";
         std::cout << "Block Pointers: [ ";
-        for (int i = 0; i < 8; i++) {
-            if (i == 0) {
-                std::cout << blockPointer[0] << " ";
-            }
-            if (i > 0 && blockPointer[i * 4] != '0') {
-                std::cout << blockPointer[i * 4] << " ";
+
+        // 1---3---4---00000000
+        // loop 8 times (max size)
+            // if i == 0 && buf[i] != '0'
+                // loop 4 times (blockPointer size)
+            // if i > 0 && buf[i*4] != '0'
+                // loop 4 times (blockPointer size)
+
+        for (int i =0 ; i < 32; i+=4){
+            if (blockPointer[i] != '0'){
+                std::cout << blockPointer[i];
+                if (blockPointer[i+1] != '-'){
+                    std::cout << blockPointer[i+1];
+                    if(blockPointer[i+2] != '-'){
+                        std::cout << blockPointer[i+2];
+                    }
+                }
+                std::cout << " ";
             }
         }
         std::cout << "]\nUsed: " << used[0] << std::endl;
@@ -321,9 +327,6 @@ public:
             If the inode is in use, compare the "name" field with the above file
             IF the file names don't match, repeat*/
         int curInodePos = 128;
-//        int foundInode;
-//        int foundSize;
-//        int foundFlag = 0;
         for (int i = 0; i <= 16; i++) { // The file system supports a max of 16 files
             // read in name
             char name[16]; // the file name must be unique and can be no longer than 15 char's (+ \0 byte)
@@ -343,10 +346,10 @@ public:
             char size[5];
             read(position, &size, 4);
             size[4] = '\0';
-//            char singleSize[1];
-//            singleSize[0] = size[0];
-//            singleSize[1] = '\0';
-//            int sz = atoi(singleSize);
+            char singleSize[1];
+            singleSize[0] = size[0];
+            singleSize[1] = '\0';
+            int sz = atoi(singleSize);
 
             // read in blockPointer
             char blockPointer[32];
@@ -371,15 +374,8 @@ public:
 
                 int stringEquality = strcmp(readInFileName, filename);
                 if (stringEquality == 0) {
-//                    foundFlag = 1;
-//                    foundInode = curInodePos; // we found the file we need to write to, save this position
-//                    foundSize = sz;
                     std::cout << "---------- [FILE FOUND] ----------\n"
-                                "Name: " << filename << "\n" <<
-                                "Size: " << size << "\n" <<
-                                "Block Pointers: \n";
-
-
+                                "Name: " << filename << ", Size: " << sz << "\n----------------------------------" << std::endl;
                     break;
                 } else {
                     curInodePos += 56; // move on to next inode
@@ -391,9 +387,24 @@ public:
                 Get the disk address of the specified block
                 That is, addr = inode.blockPointer[blockNum]
                 move the file pointer to the block location (i.e., to byte # addr*1024 in the file)*/
-
+            if (blockNum > sz){
+                std::cout << "[ERR] Cannot read block #" << blockNum << " since file '" << name << "' has size of " << sz << "KB." << std::endl;
+                exit(1);
+            }
             // Read in the block! => Read in 1024 bytes from this location into the buffer "buf"
-
+            if (blockNum == 0) {
+                lseek(position, curInodePos + 20, SEEK_SET); // positioned at inodes block pointer section
+            } else {
+                lseek(position, curInodePos + 20 + (blockNum * 4), SEEK_SET); // positioned at inodes block pointer section
+            }
+            read(position, buf, 1024);
+        }
+        std::cout << "Read at block #" << blockNum << " completed!\n";
+        for (int i = 1; i < 1025; i++){
+            std::cout << buf[i-1];
+            if( i % 32 == 0 && i != 0 ){
+                std::cout << "\n";
+            }
         }
         return 1;
     }
