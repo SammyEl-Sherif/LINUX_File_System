@@ -516,33 +516,162 @@ public:
         return 1;
     }
 
-    /*    public int detete(char name[16]) {
-         Delete the file with this name
+    int deleteFile(char filename[16]) {
+         std::cout << "Deleting file '" << filename << "'." << std::endl;
+         /* Step 1: Locate the inode for this file
+                Move the file pointer to the 1st inode (129th byte)
+                Read in a inode
+                    If the inode is free, repeat above step.
+                    If the inode is in use, check if the "name" field in the
+                    inode matches the file we want to delete. IF not, read the next inode and repeat*/
 
-         Step 1: Locate the inode for this file
-         Move the file pointer to the 1st inode (129th byte)
-         Read in a inode
-         If the iinode is free, repeat above step.
-         If the iinode is in use, check if the "name" field in the
-         inode matches the file we want to delete. IF not, read the next
-          inode and repeat
+        int curInodePos = 128;
+        int foundInode;
+        int foundSize;
+        for (unsigned int i = 0; i <= 16; i++) { // The file system supports a max of 16 files
+            // read in name
+            char name[16]; // the file name must be unique and can be no longer than 15 char's (+ \0 byte)
+            lseek(position, curInodePos, SEEK_SET);
+            read(position, &name, 15);
+            name[15] = '\0';
 
-         Step 2: free blocks of the file being deleted
-         Read in the 128 byte free block list (move file pointer to start of the disk and read in 128 bytes)
-         Free each block listed in the blockPointer fields as follows:
-         for(i=0;i< inode.size; i++)
-         freeblockList[ inode.blockPointer[i] ] = 0;
+            int filenameLength = 0;
+            for (char j: name) {
+                if (j != '0') {
+                    filenameLength++;
+                }
+            }
 
-         Step 3: mark inode as free
-         Set the "used" field to 0.
+            // read in size
+            lseek(position, 1, SEEK_CUR);
+            char size[5];
+            read(position, &size, 4);
+            size[4] = '\0';
+            char singleSize[1];
+            singleSize[0] = size[0];
+            singleSize[1] = '\0';
+            int sz = atoi(singleSize);
 
-         Step 4: Write out the inode and free block list to disk
-          Move the file pointer to the start of the file
-         Write out the 128 byte free block list
-         Move the file pointer to the position on disk where this inode was stored
-         Write out the inode
+            // read in blockPointer
+            char blockPointer[32];
+            read(position, &blockPointer, 32);
+            blockPointer[31] = '\0';
 
-    } // End Delete*/
+            // read in used
+            char used[2];
+            read(position, &used, 1);
+            used[1] = '\0';
+            int us = atoi(used);
+
+            /* ----------- ADDING AN INODE ----------- */
+            if (us == 1) { // found a used inode
+                lseek(position, curInodePos, SEEK_SET); // set fp to start of current inode
+                char readInFileName[filenameLength + 1]; // a.out has 5 chars, we need [0->5] = 6 chars
+                for (unsigned int x = 0; x < strlen(readInFileName); x++) {
+                    readInFileName[x] = ' ';
+                }
+
+                read(position, &readInFileName, filenameLength - 1); //read in 5 letters a.out
+                readInFileName[filenameLength - 1] = '\0';// add a null byte to the 6th position
+
+                int stringEquality = strcmp(readInFileName, filename);
+                if (stringEquality == 0) {
+                    // we found the file we need to write to, save this position
+                    foundInode = curInodePos;
+                    foundSize = sz;
+                    std::cout << "{INODE FOUND} Name: " << filename << ", Pos: " << foundInode << ", Size: "
+                              << foundSize << std::endl;
+                    break;
+                } else {
+                    curInodePos += 56; // move on to next inode
+                    continue;
+                }
+            }
+        }
+         /* Step 2: free blocks of the file being deleted
+                Read in the 128 byte free block list (move file pointer to start of the disk and read in 128 bytes)
+                Free each block listed in the blockPointer fields as follows:
+                for(i=0;i< inode.size; i++)
+                freeBlockList[ inode.blockPointer[i] ] = 0; */
+        char firstBlockPointer[4];
+        lseek(position, curInodePos + 20, SEEK_SET);
+        read(position, &firstBlockPointer, 3);
+        firstBlockPointer[3] = '\0';
+        int fblDeallocationPosition = atoi(firstBlockPointer);
+        std::cout << "first block pointer found: " << fblDeallocationPosition << ", found size = " << foundSize << std::endl;
+
+        // fbl[0] == superBlock, so start one position ahead (just don't -1 per usual since zero based)
+        for (int i = fblDeallocationPosition; i < fblDeallocationPosition + foundSize; i ++){
+            lseek(position, i, SEEK_SET);
+            write(position, "0", 1);
+        }
+
+         /* Step 3: mark inode as free
+                Set the "used" field to 0 */
+        lseek(position, curInodePos + 52, SEEK_SET);
+        write(position, "0", 1);
+
+         /* Step 4: Write out the inode and free block list to disk
+                Move the file pointer to the start of the file
+                Write out the 128 byte free block list
+                Move the file pointer to the position on disk where this inode was stored
+                Write out the inode */
+        std::cout << "-------- Free Block List --------" << std::endl;
+        lseek(position, 0, SEEK_SET);
+        for (int i = 0; i < 128; i++) {
+            char fblValue;
+            read(position, &fblValue, 1);
+            std::cout << fblValue << "";
+            if (i == 31 || i == 63 || i == 95 || i == 127) {
+                std::cout << "\n";
+            }
+        }
+
+        // read in name that I wrote and clean empty indexes
+        lseek(position, curInodePos, SEEK_SET);
+        char name[16];
+        char cleanName[strlen(filename)];
+        read(position, &name, 15);
+        name[15] = '\0';
+        memcpy(&cleanName, name, strlen(filename));
+
+        // read in the size
+        lseek(position, 1, SEEK_CUR);
+        char readSize[5];
+        read(position, &readSize, 4);
+        readSize[4] = '\0';
+
+        // read in block pointers
+        char blockPointer[33];
+        read(position, &blockPointer, 32);
+        blockPointer[32] = '\0';
+
+        // read in used bit (0 = unused, 1 = used)
+        char used[5];
+        read(position, &used, 4);
+        used[4] = '\0';
+
+        std::cout << "--------------------- inode ----------------------\n" << "Name: " << cleanName
+                    << "\nSize: " << readSize[0] << "KB" << "\n";
+        std::cout << "Block Pointers: [ ";
+        for (int i =0 ; i < 32; i+=4){
+            if (blockPointer[i] != '0'){
+                std::cout << blockPointer[i];
+                if (blockPointer[i+1] != '-'){
+                    std::cout << blockPointer[i+1];
+                    if(blockPointer[i+2] != '-'){
+                        std::cout << blockPointer[i+2];
+                    }
+                }
+                std::cout << " ";
+            }
+        }
+        std::cout << "]\nUsed: " << used[0] << std::endl;
+
+        // TODO Make sure functions are returning correct information
+        return 1;
+    }
+
 };
 
 int main(){
@@ -583,7 +712,7 @@ int main(){
         }
     }
 
-    // Now that we have the disk name, we will recieve commands in the format "C file1.c 3"
+    // Now that we have the disk name, we will receive commands in the format "C file1.c 3", "D lab2.c" and "L"
     int i = 0;
     while(!inputFile.eof()){
         std::cout << "--------------------------------------------------" << std::endl;
@@ -614,6 +743,7 @@ int main(){
 
             case 'D':
                 std::cout << i << ". " << command << " " << filename << std::endl;
+                fs.deleteFile(filename);
                 break;
 
             case 'R':
