@@ -16,7 +16,6 @@ public:
     void theFileSystem(char diskName[16]) { //const string& diskName
         // open the file with the above name, this file will act as the "disk" for your file system
         int fd = open(diskName, O_RDWR);
-
         if (fd < 0) {
             std::cout << "[ERROR] File '" << diskName << "' could not be opened." << std::endl;
             exit(1);
@@ -52,7 +51,7 @@ public:
 
     void create(char filename[16], int filesize) { //create a file with this name and this size
         std::cout << "Creating file with name '" << filename << "' and size " << filesize << std::endl;
-        //
+
         /* Step 1: check to see if we have sufficient free space on disk by reading in the free block list.
             To do this:
              1. move the file pointer to the start of the disk file.
@@ -80,13 +79,13 @@ public:
             lseek(position, 1, SEEK_CUR);
         }
 
-        /* Step 2: we look for a free inode on disk
-           - Read in an inode
-           - check the "used" field to see if it is free
-           - If not, repeat the above two steps until you find a free inode
-           - Set the "used" field to 1
-           - Copy the filename to the "name" field
-           - Copy the file size (in units of blocks) to the "size" field */
+        /*  Step 2: we look for a free inode on disk
+                Read in an inode
+                check the "used" field to see if it is free
+                If not, repeat the above two steps until you find a free inode
+                Set the "used" field to 1
+                Copy the filename to the "name" field
+                Copy the file size (in units of blocks) to the "size" field */
 
         // First Inode Param Positions: name at 128 | size at 143 | block p's at 175 | used at 179 (56B Total)
         const int firstInode = 128;
@@ -257,23 +256,26 @@ public:
         std::cout << "]\nUsed: " << used[0] << std::endl;
     }
 
-    void ls() const {
-        /* List names of all files on disk
-           - Step 1: read in each inode and print!
-           - Move file pointer to the position of the 1st inode (129th byte)
-           - for(i=0;i<16;i++)
-           - Read in a inode
-           - If the inode is in-use
-           - print the "name" and "size" fields from the inode */
+    int deleteFile(char filename[16]) {
+        std::cout << "Deleting file '" << filename << "'." << std::endl;
+
+        /* Step 1: Locate the inode for this file
+               Move the file pointer to the 1st inode (129th byte)
+               Read in a inode
+                   If the inode is free, repeat above step.
+                   If the inode is in use, check if the "name" field in the
+                   inode matches the file we want to delete. IF not, read the next inode and repeat */
+
         int curInodePos = 128;
-        for (int i = 0; i <= 16; i++) { // The file system supports a max of 16 files
+        int foundInode;
+        int foundSize;
+        for (unsigned int i = 0; i <= 16; i++) { // The file system supports a max of 16 files
             // read in name
             char name[16]; // the file name must be unique and can be no longer than 15 char's (+ \0 byte)
             lseek(position, curInodePos, SEEK_SET);
             read(position, &name, 15);
             name[15] = '\0';
-//            std::cout << "Name: '" << name << "'" << std::endl;
-            // TODO why is it that when uncomment the above line, ls works perfect
+
             int filenameLength = 0;
             for (char j: name) {
                 if (j != '0') {
@@ -286,6 +288,10 @@ public:
             char size[5];
             read(position, &size, 4);
             size[4] = '\0';
+            char singleSize[1];
+            singleSize[0] = size[0];
+            singleSize[1] = '\0';
+            int sz = atoi(singleSize);
 
             // read in blockPointer
             char blockPointer[32];
@@ -300,32 +306,124 @@ public:
 
             /* ----------- ADDING AN INODE ----------- */
             if (us == 1) { // found a used inode
-                lseek(position, curInodePos, SEEK_SET);
+                lseek(position, curInodePos, SEEK_SET); // set fp to start of current inode
                 char readInFileName[filenameLength + 1]; // a.out has 5 chars, we need [0->5] = 6 chars
-                for (unsigned x = 0; x < strlen(readInFileName); x++) {
+                for (unsigned int x = 0; x < strlen(readInFileName); x++) {
                     readInFileName[x] = ' ';
                 }
-//                std::cout << "READINFILENAMEBEFORE: " << readInFileName << std::endl;
+
                 read(position, &readInFileName, filenameLength - 1); //read in 5 letters a.out
-                readInFileName[filenameLength] = '\0';// add a null byte to the 6th position
-                std::cout << readInFileName << " [" << size[0] << "KB]\t";
-                if (i == 2 || i == 5 || i == 8 || i == 11) {
-                    std::cout << "\n";
+                readInFileName[filenameLength - 1] = '\0';// add a null byte to the 6th position
+
+                int stringEquality = strcmp(readInFileName, filename);
+                if (stringEquality == 0) {
+                    // we found the file we need to write to, save this position
+                    foundInode = curInodePos;
+                    foundSize = sz;
+                    std::cout << "{INODE FOUND} Name: " << filename << ", Pos: " << foundInode << ", Size: "
+                              << foundSize << std::endl;
+                    break;
+                } else {
+                    curInodePos += 56; // move on to next inode
+                    continue;
                 }
-                curInodePos += 56; // move on to next inode
             }
         }
-        std::cout << "\n";
+
+        /* Step 2: free blocks of the file being deleted
+                Read in the 128 byte free block list (move file pointer to start of the disk and read in 128 bytes)
+                Free each block listed in the blockPointer fields as follows:
+                for(i=0;i< inode.size; i++)
+                freeBlockList[ inode.blockPointer[i] ] = 0; */
+
+        char firstBlockPointer[4];
+        lseek(position, curInodePos + 20, SEEK_SET);
+        read(position, &firstBlockPointer, 3);
+        firstBlockPointer[3] = '\0';
+        int fblDeallocationPosition = atoi(firstBlockPointer);
+
+        // fbl[0] == superBlock, so start one position ahead (just don't -1 per usual since zero based)
+        for (int i = fblDeallocationPosition; i < fblDeallocationPosition + foundSize; i ++){
+            lseek(position, i, SEEK_SET);
+            write(position, "0", 1);
+        }
+
+        /* Step 3: mark inode as free
+               Set the "used" field to 0 */
+
+        lseek(position, curInodePos + 52, SEEK_SET);
+        write(position, "0", 1);
+
+        /* Step 4: Write out the inode and free block list to disk
+               Move the file pointer to the start of the file
+               Write out the 128 byte free block list
+               Move the file pointer to the position on disk where this inode was stored
+               Write out the inode */
+
+        std::cout << "-------- Free Block List --------" << std::endl;
+        lseek(position, 0, SEEK_SET);
+        for (int i = 0; i < 128; i++) {
+            char fblValue;
+            read(position, &fblValue, 1);
+            std::cout << fblValue << "";
+            if (i == 31 || i == 63 || i == 95 || i == 127) {
+                std::cout << "\n";
+            }
+        }
+
+        // read in name that I wrote and clean empty indexes
+        lseek(position, curInodePos, SEEK_SET);
+        char name[16];
+        char cleanName[strlen(filename)];
+        read(position, &name, 15);
+        name[15] = '\0';
+        memcpy(&cleanName, name, strlen(filename));
+
+        // read in the size
+        lseek(position, 1, SEEK_CUR);
+        char readSize[5];
+        read(position, &readSize, 4);
+        readSize[4] = '\0';
+
+        // read in block pointers
+        char blockPointer[33];
+        read(position, &blockPointer, 32);
+        blockPointer[32] = '\0';
+
+        // read in used bit (0 = unused, 1 = used)
+        char used[5];
+        read(position, &used, 4);
+        used[4] = '\0';
+
+        std::cout << "--------------------- inode ----------------------\n" << "Name: " << cleanName
+                  << "\nSize: " << readSize[0] << "KB" << "\n";
+        std::cout << "Block Pointers: [ ";
+        for (int i =0 ; i < 32; i+=4){
+            if (blockPointer[i] != '0'){
+                std::cout << blockPointer[i];
+                if (blockPointer[i+1] != '-'){
+                    std::cout << blockPointer[i+1];
+                    if(blockPointer[i+2] != '-'){
+                        std::cout << blockPointer[i+2];
+                    }
+                }
+                std::cout << " ";
+            }
+        }
+        std::cout << "]\nUsed: " << used[0] << std::endl;
+
+        return 1; // TODO Make sure functions are returning correct information
     }
 
     int readBlockFromFile(char filename[16], int blockNum, char buf[1024]) {
-        // read this block from this file
         std::cout << "[READ] Reading block #" << blockNum << " from file '" << filename << "'" << std::endl;
+
         /*  Step 1: locate the inode for this file
-            Move file pointer to the position of the 1st inode (129th byte)
-            Read in a inode
-            If the inode is in use, compare the "name" field with the above file
-            IF the file names don't match, repeat*/
+                Move file pointer to the position of the 1st inode (129th byte)
+                Read in an inode
+                If the inode is in use, compare the "name" field with the above file
+                IF the file names don't match, repeat */
+
         int curInodePos = 128;
         for (int i = 0; i <= 16; i++) { // The file system supports a max of 16 files
             // read in name
@@ -375,18 +473,21 @@ public:
                 int stringEquality = strcmp(readInFileName, filename);
                 if (stringEquality == 0) {
                     std::cout << "---------- [FILE FOUND] ----------\n"
-                                "Name: " << filename << ", Size: " << sz << "\n----------------------------------" << std::endl;
+                              << "Name: " << filename << ", Size: " << sz
+                              << "\n----------------------------------" << std::endl;
                     break;
                 } else {
                     curInodePos += 56; // move on to next inode
                     continue;
                 }
             }
+
             /*  Step 2: Read in the specified block
-                Check that blockNum < inode.size, else flag an error
-                Get the disk address of the specified block
-                That is, addr = inode.blockPointer[blockNum]
-                move the file pointer to the block location (i.e., to byte # addr*1024 in the file)*/
+                    Check that blockNum < inode.size, else flag an error
+                    Get the disk address of the specified block
+                    That is, addr = inode.blockPointer[blockNum]
+                    move the file pointer to the block location (i.e., to byte # addr*1024 in the file) */
+
             if (blockNum > sz){
                 std::cout << "[ERR] Cannot read block #" << blockNum << " since file '" << name << "' has size of " << sz << "KB." << std::endl;
                 exit(1);
@@ -410,17 +511,19 @@ public:
     }
 
     int writeBlockToFile(char filename[16], int blockNum, char buf[1024]) {
-        // write this block to this file
         std::cout << "[WRITE] Writing to block #" << blockNum << " in file '" << filename << "'" << std::endl;
+
         /* Step 1: locate the inode for this file
             Move file pointer to the position of the 1st inode (129th byte)
             Read in a inode
             If the inode is in use, compare the "name" field with the above file
-            If the file names don't match, repeat*/
+            If the file names don't match, repeat */
+
         int curInodePos = 128;
         int foundInode;
         int foundSize;
         int foundFlag = 0;
+
         for (unsigned int i = 0; i <= 16; i++) { // The file system supports a max of 16 files
             // read in name
             char name[16]; // the file name must be unique and can be no longer than 15 char's (+ \0 byte)
@@ -470,11 +573,10 @@ public:
                 int stringEquality = strcmp(readInFileName, filename);
                 if (stringEquality == 0) {
                     foundFlag = 1;
-                    // we found the file we need to write to, save this position
-                    foundInode = curInodePos;
+                    foundInode = curInodePos; // we found the file we need to write to, save this position
                     foundSize = sz;
-                    std::cout << "{INODE FOUND} Name: " << filename << ", Pos: " << foundInode << ", Size: "
-                              << foundSize << std::endl;
+                    std::cout << "{INODE FOUND} Name: " << filename << ", Pos: " << foundInode
+                              << ", Size: " << foundSize << std::endl;
                     break;
                 } else {
                     curInodePos += 56; // move on to next inode
@@ -493,42 +595,41 @@ public:
             Get the disk address of the specified block
             That is, addr = inode.blockPointer[blockNum]
             move the file pointer to the block location (i.e., byte # addr*1024) */
+
         if (blockNum > foundSize) {
-            std::cout << "[ERR] Out of bounds: Cannot write to block #" << blockNum << " since size of file = "
-                      << foundSize << "KB." << std::endl;
+            std::cout << "[ERR] Out of bounds: Cannot write to block #" << blockNum
+                      << " since size of file = " << foundSize << "KB." << std::endl;
             exit(1);
         }
 
         if (blockNum == 0) {
             lseek(position, foundInode + 20, SEEK_SET); // positioned at inodes block pointer section
         } else {
-            lseek(position, foundInode + 20 + (blockNum * 4),
-                  SEEK_SET); // positioned at inodes block pointer section
+            lseek(position, foundInode + 20 + (blockNum * 4), SEEK_SET); // positioned at inodes block pointer section
         }
 
         char dataBlockPos[5];
         read(position, &dataBlockPos, 4);
         dataBlockPos[4] = '\0';
         int posToWriteDataBlockTo = atoi(dataBlockPos) * 1024;
+
         // Write the block! => Write 1024 bytes from the buffer "buff" to this location
         lseek(position, posToWriteDataBlockTo, SEEK_SET);
         write(position, buf, 1024);
         return 1;
     }
 
-    int deleteFile(char filename[16]) {
-         std::cout << "Deleting file '" << filename << "'." << std::endl;
-         /* Step 1: Locate the inode for this file
-                Move the file pointer to the 1st inode (129th byte)
+    void ls() const {
+        /*  List names of all files on disk
+                Step 1: read in each inode and print!
+                Move file pointer to the position of the 1st inode (129th byte)
+                for(i=0;i<16;i++)
                 Read in a inode
-                    If the inode is free, repeat above step.
-                    If the inode is in use, check if the "name" field in the
-                    inode matches the file we want to delete. IF not, read the next inode and repeat*/
+                If the inode is in-use
+                print the "name" and "size" fields from the inode */
 
         int curInodePos = 128;
-        int foundInode;
-        int foundSize;
-        for (unsigned int i = 0; i <= 16; i++) { // The file system supports a max of 16 files
+        for (int i = 0; i <= 16; i++) { // The file system supports a max of 16 files
             // read in name
             char name[16]; // the file name must be unique and can be no longer than 15 char's (+ \0 byte)
             lseek(position, curInodePos, SEEK_SET);
@@ -547,10 +648,6 @@ public:
             char size[5];
             read(position, &size, 4);
             size[4] = '\0';
-            char singleSize[1];
-            singleSize[0] = size[0];
-            singleSize[1] = '\0';
-            int sz = atoi(singleSize);
 
             // read in blockPointer
             char blockPointer[32];
@@ -565,120 +662,28 @@ public:
 
             /* ----------- ADDING AN INODE ----------- */
             if (us == 1) { // found a used inode
-                lseek(position, curInodePos, SEEK_SET); // set fp to start of current inode
+                lseek(position, curInodePos, SEEK_SET);
                 char readInFileName[filenameLength + 1]; // a.out has 5 chars, we need [0->5] = 6 chars
-                for (unsigned int x = 0; x < strlen(readInFileName); x++) {
+                for (unsigned x = 0; x < strlen(readInFileName); x++) {
                     readInFileName[x] = ' ';
                 }
-
                 read(position, &readInFileName, filenameLength - 1); //read in 5 letters a.out
-                readInFileName[filenameLength - 1] = '\0';// add a null byte to the 6th position
-
-                int stringEquality = strcmp(readInFileName, filename);
-                if (stringEquality == 0) {
-                    // we found the file we need to write to, save this position
-                    foundInode = curInodePos;
-                    foundSize = sz;
-                    std::cout << "{INODE FOUND} Name: " << filename << ", Pos: " << foundInode << ", Size: "
-                              << foundSize << std::endl;
-                    break;
-                } else {
-                    curInodePos += 56; // move on to next inode
-                    continue;
+                readInFileName[filenameLength] = '\0';// add a null byte to the 6th position
+                std::cout << readInFileName << " [" << size[0] << "KB]\t";
+                if (i == 2 || i == 5 || i == 8 || i == 11) {
+                    std::cout << "\n";
                 }
+                curInodePos += 56; // move on to next inode
             }
         }
-         /* Step 2: free blocks of the file being deleted
-                Read in the 128 byte free block list (move file pointer to start of the disk and read in 128 bytes)
-                Free each block listed in the blockPointer fields as follows:
-                for(i=0;i< inode.size; i++)
-                freeBlockList[ inode.blockPointer[i] ] = 0; */
-        char firstBlockPointer[4];
-        lseek(position, curInodePos + 20, SEEK_SET);
-        read(position, &firstBlockPointer, 3);
-        firstBlockPointer[3] = '\0';
-        int fblDeallocationPosition = atoi(firstBlockPointer);
-        std::cout << "first block pointer found: " << fblDeallocationPosition << ", found size = " << foundSize << std::endl;
-
-        // fbl[0] == superBlock, so start one position ahead (just don't -1 per usual since zero based)
-        for (int i = fblDeallocationPosition; i < fblDeallocationPosition + foundSize; i ++){
-            lseek(position, i, SEEK_SET);
-            write(position, "0", 1);
-        }
-
-         /* Step 3: mark inode as free
-                Set the "used" field to 0 */
-        lseek(position, curInodePos + 52, SEEK_SET);
-        write(position, "0", 1);
-
-         /* Step 4: Write out the inode and free block list to disk
-                Move the file pointer to the start of the file
-                Write out the 128 byte free block list
-                Move the file pointer to the position on disk where this inode was stored
-                Write out the inode */
-        std::cout << "-------- Free Block List --------" << std::endl;
-        lseek(position, 0, SEEK_SET);
-        for (int i = 0; i < 128; i++) {
-            char fblValue;
-            read(position, &fblValue, 1);
-            std::cout << fblValue << "";
-            if (i == 31 || i == 63 || i == 95 || i == 127) {
-                std::cout << "\n";
-            }
-        }
-
-        // read in name that I wrote and clean empty indexes
-        lseek(position, curInodePos, SEEK_SET);
-        char name[16];
-        char cleanName[strlen(filename)];
-        read(position, &name, 15);
-        name[15] = '\0';
-        memcpy(&cleanName, name, strlen(filename));
-
-        // read in the size
-        lseek(position, 1, SEEK_CUR);
-        char readSize[5];
-        read(position, &readSize, 4);
-        readSize[4] = '\0';
-
-        // read in block pointers
-        char blockPointer[33];
-        read(position, &blockPointer, 32);
-        blockPointer[32] = '\0';
-
-        // read in used bit (0 = unused, 1 = used)
-        char used[5];
-        read(position, &used, 4);
-        used[4] = '\0';
-
-        std::cout << "--------------------- inode ----------------------\n" << "Name: " << cleanName
-                    << "\nSize: " << readSize[0] << "KB" << "\n";
-        std::cout << "Block Pointers: [ ";
-        for (int i =0 ; i < 32; i+=4){
-            if (blockPointer[i] != '0'){
-                std::cout << blockPointer[i];
-                if (blockPointer[i+1] != '-'){
-                    std::cout << blockPointer[i+1];
-                    if(blockPointer[i+2] != '-'){
-                        std::cout << blockPointer[i+2];
-                    }
-                }
-                std::cout << " ";
-            }
-        }
-        std::cout << "]\nUsed: " << used[0] << std::endl;
-
-        // TODO Make sure functions are returning correct information
-        return 1;
+        std::cout << "\n";
     }
 
 };
 
 int main(){
     // open up the input data test file
-    char diskName[16];
-    char command;
-    char filename[16];
+    char diskName[16], command, filename[16];
     int filesize;
 
     std::ifstream inputFile;
@@ -691,7 +696,7 @@ int main(){
 
     inputFile >> diskName;
     std::cout << "Disk Name: " << diskName << std::endl;
-    myFileSystem fs;
+    myFileSystem fs{};
     fs.theFileSystem(diskName);
     fs.initSuperBlock();
 
