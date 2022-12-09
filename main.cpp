@@ -309,7 +309,7 @@ public:
                 read(position, &readInFileName, filenameLength - 1); //read in 5 letters a.out
                 readInFileName[filenameLength] = '\0';// add a null byte to the 6th position
                 std::cout << readInFileName << " [" << size[0] << "KB]\t";
-                if (i == 3 || i == 7 || i == 11 || i == 15) {
+                if (i == 2 || i == 5 || i == 8 || i == 11) {
                     std::cout << "\n";
                 }
                 curInodePos += 56; // move on to next inode
@@ -715,7 +715,7 @@ int main(){
     // Now that we have the disk name, we will receive commands in the format "C file1.c 3", "D lab2.c" and "L"
     int i = 0;
     while(!inputFile.eof()){
-        std::cout << "--------------------------------------------------" << std::endl;
+        std::cout << "**************************************************" << std::endl;
         inputFile >> command;
         if (command != 'L'){
             inputFile >> filename;
